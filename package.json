@@ -1,0 +1,24 @@
+{
+  "name": "jsontosql",
+  "version": "1.0.0",
+  "description": "converts json to sql",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sebastianbachmaier/jsontosql.git"
+  },
+  "keywords": [
+    "json",
+    "sql",
+    "converter"
+  ],
+  "author": "Sebastian Bachmaier",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/sebastianbachmaier/jsontosql/issues"
+  },
+  "homepage": "https://github.com/sebastianbachmaier/jsontosql#readme"
+}
