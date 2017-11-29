@@ -20,5 +20,9 @@
   "bugs": {
     "url": "https://github.com/sebastianbachmaier/jsontosql/issues"
   },
-  "homepage": "https://github.com/sebastianbachmaier/jsontosql#readme"
+  "homepage": "https://github.com/sebastianbachmaier/jsontosql#readme",
+  "dependencies": {
+    "argparse": "^1.0.9",
+    "moment": "^2.19.2"
+  }
 }
