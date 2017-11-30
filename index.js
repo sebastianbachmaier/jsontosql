@@ -5,6 +5,7 @@
 
 var fs = require('fs');
 var moment = require('moment');
+var readline = require('readline');
 moment.suppressDeprecationWarnings = true;
 var ArgumentParser = require('argparse').ArgumentParser;
 
@@ -37,10 +38,27 @@ function reduceType(types) {
 	return "VARCHAR(255)";
 }
 
-function parseValue(value) {
-	if(value == "null")
+function parseValue(type, value) {
+	if(value == 'null')
 		return "NULL";
-	return value.replace(new RegExp("\'", 'g'), '´');;
+	if(type == "TEXT")
+		return "'"+value.replace(new RegExp("\'", 'g'), '´').slice(1,-1)+"'";
+	if(type == "TIMESTAMP")
+		return "'"+moment.unix(value).utc().format()+"'";
+	return value;
+}
+
+function trimNewline(string) {
+	while(true)
+	{
+		string = string.trim();
+		if(string[string.length-1] == "\n"){
+			string.slice(0,-1);
+		}
+		else{
+			return string;
+		}
+	}
 }
 
 
@@ -53,17 +71,27 @@ var argparse = new ArgumentParser({
 });
 
 argparse.addArgument(
-	[ '-l', '--linewise' ],
+	[ '-f', '--format' ],
 	{
-		action: 'storeTrue',
-		help: 'json objects added linewise (not comma separated)'
+		help: `format of json file : 
+
+
+	standard  
+		[
+			{...},
+			{...},
+			 ...
+		]
+	lines 
+		{...}\\n{...}\\n...
+`
 	}
 );
 
 argparse.addArgument(
-	[ '-f', '--file' ],
+	[ '-i', '--input' ],
 	{
-		help: 'file'
+		help: 'the filename'
 	}
 );
 
@@ -76,88 +104,121 @@ argparse.addArgument(
 
 var args = argparse.parseArgs();
 
-var filename = args["file"];
+var filename = args["input"];
 var tablename = args["table"];
-var linewise = args["linewise"];
-
+var format = args["format"];
+var filecontent = [""];
 /*** READING FILE ***/
 
 try {
-	var filecontent = fs.readFileSync(filename, "utf8");
+
+	var fileSize = fs.statSync(filename).size/(Math.pow(2,20));
+	if(fileSize > 250){
+		console.error("Reading big file ("+fileSize+" MiB)");
+	}
+
+	var lineNo = 0;
+
+	new readline.createInterface({
+		input: fs.createReadStream(filename)
+	})
+	.on('line', (line) => {
+		
+		if(filecontent[filecontent.length-1].length+line.length > Math.pow(2,20))
+		{
+			filecontent.push("");
+		}
+		lineNo++;
+		filecontent[filecontent.length-1] += (line+"\n");
+
+	})
+	.on('close', () => {
+
+
+		if(format == "lines")
+		{
+			for(var i in filecontent)
+			{
+				filecontent[i] = trimNewline(filecontent[i]);
+				filecontent[i] = filecontent[i].replace(new RegExp("\n", 'g'), ',');
+				filecontent[i] = "[" + filecontent[i] + "]";
+			}
+		}
+
+		try {
+			var json = JSON.parse(filecontent[0]);
+		} catch(e) {
+			console.error("Error parsing "+filename+" : "+e);
+			return -1;
+		}
+
+		/*** READING COLUMNS ***/
+
+
+		var columns = {};
+		for(var obj of json)
+		{
+			for(var k in obj)
+			{
+				if(!columns[k])
+					columns[k] = {};
+				columns[k][sqlType(obj[k])] = true;
+			}
+		}
+
+		for(var c in columns) {
+			columns[c] = {type: reduceType(Object.keys(columns[c])), isNull: Object.keys(columns[c]).indexOf("NULL") != -1};
+		}
+
+
+		/*** CREATE STRINGS ***/
+
+		var create_table = "CREATE TABLE "+tablename+" (\n";
+
+		create_table += Object.keys(columns).map(
+				(key, index) => {
+					return "\t"
+					+ key
+					+ " "
+					+ columns[key]["type"]
+					+ (columns[key]["isNull"]?"":" NOT NULL");
+				}
+			).join(",\n");
+
+		create_table += "\n);"
+
+		var insert_into = [];
+		for(var obj of json)
+		{
+			insert_into.push(
+				"INSERT INTO "
+				+ tablename
+				+ " (\n\t"
+				+ Object.keys(obj).join(",\n\t")
+				+ "\n) VALUES (\n\t"
+				+ Object.keys(obj).map(k => 
+					parseValue(columns[k].type, JSON.stringify(obj[k]))
+				  ).join(",\n\t")
+				+ ");\n"
+			);
+		}
+
+
+		/*** PRINT ***/
+
+		console.log(create_table);
+		console.log(insert_into.join("\n"));
+
+
+
+	});
+
+
 } catch(e) {
 	console.error("Error reading "+filename+" : "+e);
 	return -1;
 }
 
-if(linewise){
-	filecontent = filecontent.replace(new RegExp("\n", 'g'), ',');
-	filecontent = "[" +filecontent + "]";
-}
-
-
-try {
-	var json = JSON.parse(filecontent);
-} catch(e) {
-	console.error("Error parsing "+filename+" : "+e);
-	return -1;
-}
-
-/*** READING COLUMNS ***/
-
-
-var columns = {};
-for(var obj of json)
-{
-	for(var k in obj)
-	{
-		if(!columns[k])
-			columns[k] = {};
-		columns[k][sqlType(obj[k])] = true;
-	}
-}
-
-for(var c in columns) {
-	columns[c] = {type: reduceType(Object.keys(columns[c])), isNull: Object.keys(columns[c]).indexOf("NULL") != -1};
-}
-
-
-/*** CREATE STRINGS ***/
-
-var create_table = "CREATE TABLE "+tablename+" (\n";
-
-create_table += Object.keys(columns).map(
-		(key, index) => {
-			return "\t"
-			+ key
-			+ " "
-			+ columns[key]["type"]
-			+ " NOT NULL";
-		}
-	).join(",\n");
-
-create_table += "\n);"
-
-var insert_into = [];
-for(var obj of json)
-{
-	insert_into.push(
-		"INSERT INTO "
-		+ tablename
-		+ " ("
-		+ Object.keys(obj).join(",")
-		+ ") VALUES ("
-		+ Object.keys(obj).map(k => 
-			"\'"+parseValue(obj[k]+"")+"\'"
-		  ).join(",")
-		+ ");"
-	);
-}
-
-
-/*** PRINT ***/
-
-console.log(create_table);
-console.log(insert_into.join("\n"));
 
 
 return 0;
