@@ -1,3 +1,4 @@
 node_modules/
 test.sql
 test.json
+npm-debug.log
