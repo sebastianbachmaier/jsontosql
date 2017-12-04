@@ -29,7 +29,7 @@ function sqlType(element) {
 }
 
 function reduceType(types) {
-	var priority = [ "TEXT","FLOAT","INT","TIMESTAMP","BOOLEAN"/**,NULL**/];
+	var priority = [ "TEXT","BOOLEAN","FLOAT","INT","TIMESTAMP"/**,NULL**/];
 	for(var t of priority)
 	{
 		if(types.indexOf(t) !== -1)
@@ -38,13 +38,21 @@ function reduceType(types) {
 	return "VARCHAR(255)";
 }
 
-function parseValue(type, value) {
+function parseValue(type, value)  {
+	if(type == "BOOLEAN"){
+		if(value == false)
+			return false;
+		else
+			return true;
+	}
 	if(value == 'null')
 		return "NULL";
 	if(type == "TEXT")
 		return "'"+value.replace(new RegExp("\'", 'g'), '´').slice(1,-1)+"'";
 	if(type == "TIMESTAMP")
 		return "'"+moment.unix(value).utc().format()+"'";
+	if(type == "INT")
+		return value.replace(new RegExp("\"", 'g'), '')
 	return value;
 }
 
@@ -58,6 +66,12 @@ function trimNewline(string) {
 		else{
 			return string;
 		}
+	}
+}
+
+function splitObject(obj) {
+	for(var key in obj) {
+		
 	}
 }
 
@@ -102,12 +116,106 @@ argparse.addArgument(
 	}
 );
 
+
 var args = argparse.parseArgs();
 
 var filename = args["input"];
 var tablename = args["table"];
 var format = args["format"];
-var filecontent = [""];
+var filecontent = "";
+var tables = {};
+var columns = {};
+var json = [];
+
+
+/*** JSONTOSQL ***/
+
+function process_out(line)
+{
+	console.log(line);
+}
+
+
+function preformat(file, format) {
+	if(format == "lines")
+	{
+		file = trimNewline(file);
+		file = file.replace(new RegExp("\n", 'g'), ',');
+		file = "[" + file + "]";
+	}
+
+	try {
+		var json = JSON.parse(file);
+	} catch(e) {
+		console.error("Error parsing "+filename+" : "+e);
+		return -1;
+	}
+
+	return json;
+}
+
+function table_obj(file, columns, format)
+{
+	var json = preformat(file,format);
+	for(var obj of json)
+	{
+		for(var k in obj)
+		{
+			if(!columns[k])
+				columns[k] = {};
+			columns[k][sqlType(obj[k])] = true;
+		}
+	}
+	return columns;
+}
+
+
+function table_sql(columns)
+{
+	for(var c in columns) {
+		columns[c] = {type: reduceType(Object.keys(columns[c])), isNull: Object.keys(columns[c]).indexOf("NULL") != -1};
+	}
+
+	var create_table = `\n\nCREATE TABLE `+tablename+" (\n";
+
+	create_table += Object.keys(columns).map(
+			(key, index) => {
+				return "\t"
+				+ key
+				+ " "
+				+ columns[key]["type"]
+				+ (columns[key]["isNull"]?"":" NOT NULL");
+			}
+		).join(",\n");
+
+	create_table += "\n);\n\n"
+
+	process_out(create_table);
+	return columns;
+
+}
+
+function insert_sql(file, format)
+{
+	var json = preformat(file, format);
+	for(var obj of json)
+	{
+		process_out(
+			"INSERT INTO "
+			+ tablename
+			+ " (\n\t"
+			+ Object.keys(obj).join(",\n\t")
+			+ "\n) VALUES (\n\t"
+			+ Object.keys(obj).map(k =>
+				parseValue(columns[k].type, JSON.stringify(obj[k]))
+			  ).join(",\n\t")
+			+ "\n);\n"
+		);
+	}
+
+}
+
+
 /*** READING FILE ***/
 
 try {
@@ -119,100 +227,47 @@ try {
 
 	var lineNo = 0;
 
+	/*** SCAN FOR TABLE COLUMNS ***/
 	new readline.createInterface({
 		input: fs.createReadStream(filename)
 	})
 	.on('line', (line) => {
-		
-		if(filecontent[filecontent.length-1].length+line.length > Math.pow(2,20))
+
+		if(filecontent.length+line.length > Math.pow(2,25))
 		{
-			filecontent.push("");
+			columns = table_obj(filecontent, columns, format);
+			filecontent = "";
 		}
 		lineNo++;
-		filecontent[filecontent.length-1] += (line+"\n");
+		filecontent += (line+"\n");
 
 	})
 	.on('close', () => {
 
+		columns = table_obj(filecontent, columns, format);
+		filecontent = "";
+		columns = table_sql(columns);
 
-		if(format == "lines")
-		{
-			for(var i in filecontent)
+
+		/*** SCAN FOR TABLE CONTENT ***/
+		new readline.createInterface({
+			input: fs.createReadStream(filename)
+		})
+		.on('line', (line) => {
+
+			if(filecontent.length+line.length > Math.pow(2,25))
 			{
-				filecontent[i] = trimNewline(filecontent[i]);
-				filecontent[i] = filecontent[i].replace(new RegExp("\n", 'g'), ',');
-				filecontent[i] = "[" + filecontent[i] + "]";
+				insert_sql(filecontent, format);
+				filecontent = "";
 			}
-		}
+			lineNo++;
+			filecontent += (line+"\n");
 
-		try {
-			var json = JSON.parse(filecontent[0]);
-		} catch(e) {
-			console.error("Error parsing "+filename+" : "+e);
-			return -1;
-		}
-
-		/*** READING COLUMNS ***/
-
-
-		var columns = {};
-		for(var obj of json)
-		{
-			for(var k in obj)
-			{
-				if(!columns[k])
-					columns[k] = {};
-				columns[k][sqlType(obj[k])] = true;
-			}
-		}
-
-		for(var c in columns) {
-			columns[c] = {type: reduceType(Object.keys(columns[c])), isNull: Object.keys(columns[c]).indexOf("NULL") != -1};
-		}
-
-
-		/*** CREATE STRINGS ***/
-
-		var create_table = "CREATE TABLE "+tablename+" (\n";
-
-		create_table += Object.keys(columns).map(
-				(key, index) => {
-					return "\t"
-					+ key
-					+ " "
-					+ columns[key]["type"]
-					+ (columns[key]["isNull"]?"":" NOT NULL");
-				}
-			).join(",\n");
-
-		create_table += "\n);"
-
-		var insert_into = [];
-		for(var obj of json)
-		{
-			insert_into.push(
-				"INSERT INTO "
-				+ tablename
-				+ " (\n\t"
-				+ Object.keys(obj).join(",\n\t")
-				+ "\n) VALUES (\n\t"
-				+ Object.keys(obj).map(k => 
-					parseValue(columns[k].type, JSON.stringify(obj[k]))
-				  ).join(",\n\t")
-				+ ");\n"
-			);
-		}
-
-
-		/*** PRINT ***/
-
-		console.log(create_table);
-		console.log(insert_into.join("\n"));
-
-
+		}).on('close', () => {
+			insert_sql(filecontent, format);
+		});
 
 	});
-
 
 } catch(e) {
 	console.error("Error reading "+filename+" : "+e);
