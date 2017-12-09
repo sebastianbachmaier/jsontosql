@@ -1,6 +1,6 @@
 {
   "name": "jsontosql",
-  "version": "1.0.1a",
+  "version": "1.0.1b",
   "description": "converts json to sql",
   "main": "converter.js",
   "scripts": {
